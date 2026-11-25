@@ -1,0 +1,104 @@
+# Settings for developing this repository's own scripts. The repository isn't a
+# Python package: the files rendered into projects are in template/. Its Hatch
+# environments are standalone ("detached"), so they install tools, not the repository.
+[dependency-groups]
+test = [ "pytest==9.2", { include-group = "scripts" } ]
+check-types = [ "pyrefly==1.5", "types-pyyaml", { include-group = "test" } ]
+scripts = [ "copier==9.19.1", "pyyaml==6.0.4" ]
+
+[tool.hatch]
+requires-hatch = ">=1.18"
+
+[tool.hatch.envs.default]
+detached = true
+python = "3.11"
+installer = "uv"
+dependencies = []
+dependency-groups = [ "scripts" ]
+
+# Run from anywhere in the clone. Paths in arguments are relative to where you run them.
+[tool.hatch.envs.default.scripts]
+compare = 'python "{root}/github-settings/compare.py" {args}'
+configure = 'python "{root}/github-settings/configure.py" {args}'
+new-project = 'python "{root}/new-project.py" {args}'
+update = "copier update --defaults {args}"
+
+[tool.hatch.envs.hatch-check-types]
+detached = true
+python = "3.11"
+dependencies = []
+config-path = "pyproject.toml"
+dependency-groups = [ "check-types" ]
+
+[tool.hatch.envs.hatch-test]
+detached = true
+dependencies = []
+dependency-groups = [ "test" ]
+
+[[tool.hatch.envs.hatch-test.matrix]]
+python = [ "3.11", "3.12", "3.13", "3.14", "3.15" ]
+
+[tool.hatch.envs.pre-commit]
+detached = true
+dependencies = [ "pre-commit==4.7.0" ]
+
+[tool.hatch.envs.pre-commit.scripts]
+ci = "pre-commit run --all-files"
+install = "pre-commit install"
+run = "pre-commit run --all {args}"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+indent-width = 4
+src = [ "github-settings", "tests" ]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint]
+select = [ "D", "E", "F", "I", "UP", "W" ]
+ignore = [
+    "D1",
+    # Below as recommended at https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+    "D203",
+    "D205",
+    "D206",
+    "D300",
+    "E111",
+    "E114",
+    "E117",
+    "E203",
+    "E501",
+    "W191",
+]
+
+[tool.pyproject-fmt]
+column_width = 88
+indent = 4
+keep_full_version = false
+table_format = "long"
+sub_table_spacing = "\n"
+separate_root_table = "\n"
+expand_tables = []
+collapse_tables = []
+skip_wrap_for_keys = []
+
+[tool.pyrefly]
+python-version = "3.11"
+project-includes = [ "github-settings", "new-project.py", "tests" ]
+search-path = [ "github-settings", "tests" ]
+errors = { implicit-any-lambda = "ignore" }
+disable-search-path-heuristics = true
+preset = "strict"
+
+[tool.pytest]
+addopts = [ "-ra", "-q" ]
+filterwarnings = [ "error" ]
+log_level = "INFO"
+minversion = "9.0"
+strict = true
+testpaths = [ "tests" ]

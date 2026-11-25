@@ -1,0 +1,328 @@
+name: CI
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.13.9"
+  HATCH_VERSION: "1.18.2"
+
+jobs:
+  scripts:
+    name: Tests and checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+
+      - name: Install hatch
+        run: uv tool install "hatch==$HATCH_VERSION"
+
+      # The scripts' tests, and the template's: rendering it, its answers'
+      # escaping and validation, and turning the docs off with an update.
+      - name: Run the tests on every supported Python
+        run: hatch test --all
+
+      # Ruff, actionlint, zizmor, the type check and the text checks, at the
+      # versions in .pre-commit-config.yaml and pyproject.toml.
+      - name: Run pre-commit hooks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          hatch run pre-commit:ci
+          git diff --exit-code
+
+  render:
+    name: "Render / ${{ matrix.python-support }}, docs ${{ matrix.docs }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-support: [spec0, eol]
+        docs: [true, false]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Install hatch
+        run: uv tool install "hatch==$HATCH_VERSION"
+
+      - name: Render template
+        env:
+          PYTHON_SUPPORT: ${{ matrix.python-support }}
+          DOCS: ${{ matrix.docs }}
+        run: |
+          hatch run copier copy --defaults --vcs-ref HEAD \
+            -d project_name=example-project \
+            -d project_description="Example project" \
+            -d python_support="$PYTHON_SUPPORT" \
+            -d docs_enabled="$DOCS" \
+            -d 'keywords=["example", "template"]' \
+            . generated
+
+      # The project's hooks name its oldest supported Python, and so need it
+      # on PATH, as in the project's own CI.
+      - name: Read the project's oldest supported Python
+        id: minimum
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("generated/pyproject.toml").read_text())["project"]
+          print("python=" + project["requires-python"].removeprefix(">="))
+          PY
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ steps.minimum.outputs.python }}
+
+      - name: Commit and tag the generated project
+        working-directory: generated
+        run: |
+          git init -q
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -qm "Generate"
+          git tag 0.1.0
+
+      - name: Check code and types
+        working-directory: generated
+        run: |
+          hatch check code
+          hatch check types
+
+      - name: Run tests on every supported Python
+        working-directory: generated
+        run: hatch test --all
+
+      - name: Run pre-commit hooks
+        working-directory: generated
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          hatch run pre-commit:ci
+          git diff --exit-code
+
+      - name: Build package
+        working-directory: generated
+        run: hatch build
+
+      - name: Build docs
+        if: matrix.docs
+        working-directory: generated
+        run: hatch run docs:build
+
+  # Copier's main job: a project with its own changes takes a template update
+  # without conflicts, keeps its changes, and still passes its checks.
+  update:
+    name: Update a customised project
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Install tools
+        run: |
+          uv tool install "hatch==$HATCH_VERSION"
+
+      - name: Choose the template version to update from
+        id: base
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # A pull request updates from its base. Otherwise, update from the
+          # latest earlier tag, or from the previous commit if there's none.
+          # The first commit has neither, so the later steps are skipped.
+          if [[ -n "$PR_BASE" ]]; then
+            base="$PR_BASE"
+          elif ! base=$(git describe --tags --abbrev=0 HEAD^ 2> /dev/null) &&
+               ! base=$(git rev-parse --verify --quiet HEAD^); then
+            base=""
+          fi
+          if [[ -n "$base" ]]; then
+            echo "Updating from $base"
+          else
+            echo "::notice::No earlier version to update from, so the update isn't tested"
+          fi
+          echo "ref=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Render the earlier version and change the project
+        if: steps.base.outputs.ref != ''
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          hatch run copier copy --defaults --vcs-ref "$BASE" \
+            -d project_name=example-project \
+            -d project_description="Example project" \
+            -d python_support=eol \
+            -d docs_enabled=true \
+            "$GITHUB_WORKSPACE" "$RUNNER_TEMP/project"
+          # Outside the template's checkout, which Copier would otherwise see
+          # as containing a stray Git repository.
+          cd "$RUNNER_TEMP/project"
+          git init -q --initial-branch=main
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -qm "Generate"
+
+          # The project's own code, tests, docs and changelog entry, and its
+          # changes to files the template manages.
+          python - <<'PY'
+          from pathlib import Path
+
+          Path("src/example_project/core.py").write_text(
+              '"""Core functions."""\n\n\n'
+              "def double(value: int) -> int:\n"
+              '    """Return twice the value.\n\n'
+              "    >>> double(2)\n"
+              "    4\n"
+              '    """\n'
+              "    return 2 * value\n"
+          )
+          Path("tests/test_core.py").write_text(
+              "from example_project.core import double\n\n\n"
+              "def test_double() -> None:\n"
+              "    assert double(3) == 6\n"
+          )
+          api = Path("docs/site/api/index.md")
+          api.write_text(api.read_text() + "\n::: example_project.core\n")
+          changelog = Path("docs/CHANGELOG.md")
+          changelog.write_text(
+              changelog.read_text().replace(
+                  "## [Unreleased]\n",
+                  "## [Unreleased]\n\n### Added\n\n- `double`, to double a number\n",
+                  1,
+              )
+          )
+          readme = Path("README.md")
+          readme.write_text(
+              readme.read_text().replace(
+                  "import example_project\n```\n",
+                  "import example_project\n```\n\n"
+                  "Double a number with `example_project.core.double`.\n",
+                  1,
+              )
+          )
+          pyproject = Path("pyproject.toml")
+          pyproject.write_text(
+              pyproject.read_text().replace(
+                  "dependencies = []\n", 'dependencies = [ "packaging>=24" ]\n', 1
+              )
+          )
+          PY
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -qm "Customise"
+
+      # The update script the README documents, run from the template's clone.
+      - name: Update to this version
+        if: steps.base.outputs.ref != ''
+        run: hatch run update "$RUNNER_TEMP/project" --vcs-ref HEAD
+
+      - name: Check the update applied cleanly and kept the project's changes
+        if: steps.base.outputs.ref != ''
+        working-directory: ${{ runner.temp }}/project
+        run: |
+          if grep -rIn --exclude-dir=.git -e '^<<<<<<< ' -e '^>>>>>>> ' .; then
+            echo "The update left conflicts" >&2
+            exit 1
+          fi
+          if find . -name '*.rej' | grep .; then
+            echo "The update left rejected changes" >&2
+            exit 1
+          fi
+          grep -q 'def double' src/example_project/core.py
+          grep -q 'def test_double' tests/test_core.py
+          grep -q '::: example_project.core' docs/site/api/index.md
+          grep -q 'to double a number' docs/CHANGELOG.md
+          grep -q 'example_project.core.double' README.md
+          grep -q '"packaging>=24"' pyproject.toml
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -qm "Update" --allow-empty
+
+      # The project's hooks name its oldest supported Python, and so need it
+      # on PATH, as in the project's own CI.
+      - name: Read the project's oldest supported Python
+        if: steps.base.outputs.ref != ''
+        id: minimum
+        working-directory: ${{ runner.temp }}/project
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
+          print("python=" + project["requires-python"].removeprefix(">="))
+          PY
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: steps.base.outputs.ref != ''
+        with:
+          python-version: ${{ steps.minimum.outputs.python }}
+
+      - name: Check the updated project
+        if: steps.base.outputs.ref != ''
+        working-directory: ${{ runner.temp }}/project
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          hatch check code
+          hatch check types
+          hatch test --python 3.14
+          hatch run pre-commit:ci
+          git diff --exit-code
+          hatch run docs:build
+
+  # One required check for the main ruleset, as in generated projects.
+  ci-gate:
+    name: CI gate
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [scripts, render, update]
+    steps:
+      - name: Require every check
+        env:
+          SCRIPTS: ${{ needs.scripts.result }}
+          RENDER: ${{ needs.render.result }}
+          UPDATE: ${{ needs.update.result }}
+        run: |
+          test "$SCRIPTS" = success
+          test "$RENDER" = success
+          test "$UPDATE" = success

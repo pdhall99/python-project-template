@@ -1,0 +1,276 @@
+[% macro toml_escape(value) %][[[ value | replace('\\', '\\\\') | replace('"', '\\"') ]]][% endmacro -%]
+# [build-system]
+[build-system]
+build-backend = "hatchling.build"
+requires = [ "hatch-vcs", "hatchling>=1.32" ]
+
+# --------------------------------------------------------------------------------------
+# [project]
+[project]
+name = "[[[ project_name ]]]"
+import-names = [ "[[[ package_name ]]]" ]
+description = "[[[ toml_escape(project_description) ]]]"
+readme = { file = "README.md", content-type = "text/markdown" }
+[% if keywords -%]
+keywords = [
+[%- for keyword in keywords %]
+    "[[[ toml_escape(keyword) ]]]",
+[%- endfor %]
+]
+[% else -%]
+keywords = []
+[% endif -%]
+license = "MIT"
+license-files = [ "LICENSE" ]
+requires-python = ">=[[[ minimum_python ]]]"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+[%- for version in supported_python_versions %]
+    "Programming Language :: Python :: [[[ version ]]]",
+[%- endfor %]
+    "Typing :: Typed",
+]
+dynamic = [ "version" ]
+[% if runtime_dependencies -%]
+dependencies = [
+[%- for dependency in runtime_dependencies %]
+    "[[[ toml_escape(dependency) ]]]",
+[%- endfor %]
+]
+[%- else -%]
+dependencies = []
+[%- endif %]
+
+[[project.authors]]
+name = "[[[ toml_escape(author_name) ]]]"
+email = "[[[ toml_escape(author_email) ]]]"
+
+[project.urls]
+Homepage = "https://github.com/[[[ github_owner ]]]/[[[ project_name ]]]"
+[% if docs_enabled -%]
+Documentation = "https://[[[ github_owner ]]].github.io/[[[ project_name ]]]/"
+[% else -%]
+Documentation = "https://github.com/[[[ github_owner ]]]/[[[ project_name ]]]/blob/main/README.md"
+[% endif -%]
+Source = "https://github.com/[[[ github_owner ]]]/[[[ project_name ]]]"
+Issues = "https://github.com/[[[ github_owner ]]]/[[[ project_name ]]]/issues"
+Changelog = "[% if docs_enabled %]https://[[[ github_owner ]]].github.io/[[[ project_name ]]]/project/changelog/[% else %]https://github.com/[[[ github_owner ]]]/[[[ project_name ]]]/blob/main/docs/CHANGELOG.md[% endif %]"
+
+# --------------------------------------------------------------------------------------
+# [dependency-groups]
+[dependency-groups]
+dev = [
+    { include-group = "check-code" },
+    { include-group = "check-fmt" },
+    { include-group = "check-types" },
+    { include-group = "test" },
+]
+test = [
+    "coverage[toml]~=7.11",
+    "coverage-enable-subprocess==1",
+    "pytest~=9.0",
+    "pytest-mock~=3.12",
+    "pytest-randomly~=5.0",
+    "pytest-rerunfailures~=16.0",
+    "pytest-sugar",
+    "pytest-xdist[psutil]~=3.5",
+]
+[% if docs_enabled -%]
+docs = [
+    "mkdocstrings-python",
+    "zensical",
+]
+[% endif -%]
+check-code = [ "ruff==0.17.6" ]  # checked by the ruff-version pre-commit hook
+check-fmt = [ { include-group = "check-code" } ]
+check-types = [ "pyrefly==1.5", { include-group = "test" } ]
+
+# --------------------------------------------------------------------------------------
+# [tool.hatch]
+[tool.hatch]
+requires-hatch = ">=1.18"
+
+[tool.hatch.version.raw-options]
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/[[[ package_name ]]]/_version.py"
+
+[tool.hatch.build.targets.sdist]
+exclude = [ ".github" ]
+
+[tool.hatch.build.targets.wheel]
+packages = [ "src/[[[ package_name ]]]" ]
+
+[tool.hatch.envs.default]
+python = "[[[ minimum_python ]]]"
+installer = "uv"
+dependencies = []
+
+[tool.hatch.envs.dev]
+dependencies = []
+post-install-commands = [ "hatch run pre-commit:install" ]
+dependency-groups = [ "dev" ]
+[% if docs_enabled %]
+[tool.hatch.envs.docs]
+dependencies = []
+dependency-groups = [ "docs" ]
+
+[tool.hatch.envs.docs.scripts]
+build = "zensical build --strict"
+serve = "zensical serve"
+[% endif %]
+[tool.hatch.envs.hatch-check-code]
+dependencies = []
+config-path = "pyproject.toml"
+dependency-groups = [ "check-code" ]
+
+[tool.hatch.envs.hatch-check-fmt]
+dependencies = []
+config-path = "pyproject.toml"
+dependency-groups = [ "check-fmt" ]
+
+[tool.hatch.envs.hatch-check-types]
+python = "[[[ minimum_python ]]]"
+dependencies = []
+config-path = "pyproject.toml"
+dependency-groups = [ "check-types" ]
+
+[tool.hatch.envs.hatch-static-analysis]
+dependencies = []
+config-path = "pyproject.toml"
+dependency-groups = [ "check-code" ]
+
+[tool.hatch.envs.hatch-test]
+dependencies = []
+default-args = []
+dependency-groups = [ "test" ]
+
+[[tool.hatch.envs.hatch-test.matrix]]
+python = [ [% for version in supported_python_versions %]"[[[ version ]]]"[% if not loop.last %], [% endif %][% endfor %] ]
+
+[tool.hatch.envs.hatch-test.scripts]
+cov-combine = "coverage combine"
+cov-report = [ "coverage report {args}", "coverage html" ]
+cov-report-markdown = "coverage report --format=markdown"
+run = "pytest{env:HATCH_TEST_ARGS:} {args}"
+run-cov = "coverage run -m pytest{env:HATCH_TEST_ARGS:} {args}"
+
+[tool.hatch.envs.notebook]
+dependencies = [ "ipywidgets", "jupyterlab", "pip" ]
+
+[tool.hatch.envs.notebook.scripts]
+lab = "jupyter lab"
+
+[tool.hatch.envs.pre-commit]
+detached = true
+skip-install = true
+dependencies = [ "pre-commit" ]
+
+[tool.hatch.envs.pre-commit.scripts]
+ci = "pre-commit run --all-files"
+install = "pre-commit install"
+run = "pre-commit run --all {args}"
+
+# --------------------------------------------------------------------------------------
+# [tool.ruff]
+[tool.ruff]
+target-version = "py[[[ minimum_python | replace('.', '') ]]]"
+line-length = 88
+indent-width = 4
+src = [ "src" ]
+include = [ "scripts/**/*.py", "src/**/*.py", "src/**/*.pyi", "tests/**/*.py" ]
+exclude = [ "**/_version.py" ]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = [ "F401" ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint]
+select = [ "D", "E", "F", "I", "UP", "W" ]
+ignore = [
+    "D1",
+    # Below as recommended at https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+    "D203",
+    "D205",
+    "D206",
+    "D300",
+    "E111",
+    "E114",
+    "E117",
+    "E203",
+    "E501",
+    "W191",
+]
+
+# --------------------------------------------------------------------------------------
+# [tool.pyproject-fmt]
+[tool.pyproject-fmt]
+column_width = 88
+indent = 4
+keep_full_version = false
+generate_python_version_classifiers = false
+max_supported_python = "[[[ newest_python ]]]"
+table_format = "long"
+sub_table_spacing = "\n"
+separate_root_table = "\n"
+expand_tables = []
+collapse_tables = []
+skip_wrap_for_keys = []
+
+# --------------------------------------------------------------------------------------
+# [tool.pyrefly]
+[tool.pyrefly]
+python-version = "[[[ minimum_python ]]]"
+project-includes = [ "src/[[[ package_name ]]]", "tests" ]
+search-path = [ "src" ]
+errors = { implicit-any-lambda = "ignore" }
+disable-search-path-heuristics = true
+preset = "strict"
+
+# --------------------------------------------------------------------------------------
+# [tool.pytest]
+[tool.pytest]
+addopts = [ "-ra", "-q", "--doctest-modules", "--doctest-glob=*.md" ]
+filterwarnings = [ "error" ]
+log_level = "INFO"
+minversion = "9.0"
+strict = true
+testpaths = [ "tests", "src/[[[ package_name ]]]", "README.md" ]
+
+# --------------------------------------------------------------------------------------
+# [tool.coverage]
+[tool.coverage.run]
+source_pkgs = [ "[[[ package_name ]]]" ]
+omit = [ "*/_version.py" ]
+branch = true
+parallel = true
+
+[tool.coverage.paths]
+[[[ package_name ]]] = [ "src/[[[ package_name ]]]", "*/site-packages/[[[ package_name ]]]" ]
+
+[tool.coverage.report]
+exclude_lines = [
+    ".*\\.\\.\\.$",
+    "if __name__ == .__main__.:",
+    "if 0:",
+    "if self\\.debug",
+    "if TYPE_CHECKING:",
+    "no cov",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]

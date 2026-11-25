@@ -1,0 +1,171 @@
+_min_copier_version: "9.19"
+_subdirectory: template
+_templates_suffix: .jinja
+_envops:
+  autoescape: false
+  block_start_string: "[%"
+  block_end_string: "%]"
+  comment_start_string: "[#"
+  comment_end_string: "#]"
+  variable_start_string: "[[["
+  variable_end_string: "]]]"
+  keep_trailing_newline: true
+
+# Starter files that each project rewrites: created once, never updated.
+_skip_if_exists:
+  - "src/*/__init__.py"
+  - "tests/test_package.py"
+  - "docs/CHANGELOG.md"
+  - "docs/site/index.md"
+  - "docs/site/getting-started/index.md"
+  - "docs/site/api/index.md"
+
+_message_after_copy: |
+  Created [[[ project_name ]]] in [[[ _copier_conf.dst_path ]]].
+
+  To commit it, push it to a new GitHub repository and configure that
+  repository, run this from a clone of python-project-template:
+
+    hatch run new-project [% if _copier_conf.dst_path.is_absolute() %][[[ _copier_conf.dst_path ]]][% else %]FOLDER
+
+  where FOLDER is the full path to [[[ _copier_conf.dst_path ]]], such as ~/projects/[[[ _copier_conf.dst_path.name ]]].[% endif %]
+
+_message_after_update: |
+  Updated [[[ project_name ]]] from python-project-template.
+
+  Review the changes, resolve any conflict markers, and check the template
+  changelog for manual steps:
+  https://github.com/pdhall99/python-project-template/blob/main/CHANGELOG.md
+
+project_name:
+  type: str
+  help: PyPI distribution / repository name (usually kebab-case or lowercase).
+  validator: >-
+    [% if not (project_name | regex_search('^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9])$')) %]
+    Use letters, digits, ".", "_" and "-", starting and ending with a letter or digit
+    [% endif %]
+
+package_name:
+  type: str
+  help: Import package name.
+  default: "[[[ project_name | replace('-', '_') | replace('.', '_') | lower ]]]"
+  validator: >-
+    [% if not (package_name | regex_search('^[A-Za-z_][A-Za-z0-9_]*$')) %]
+    Use a valid Python identifier: letters, digits and "_", not starting with a digit
+    [% elif package_name in ["False", "None", "True", "and", "as", "assert", "async",
+    "await", "break", "class", "continue", "def", "del", "elif", "else", "except",
+    "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+    "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with",
+    "yield"] %]
+    "[[[ package_name ]]]" is a Python keyword
+    [% endif %]
+
+project_description:
+  type: str
+  help: One-line project description, without a full stop, question mark or exclamation mark at the end.
+  validator: >-
+    [% if not project_description.strip() %]
+    Give a description
+    [% elif project_description | regex_search('[\x00-\x1f\x7f]') %]
+    Keep the description to one line, without tabs or other control characters
+    [% elif project_description.rstrip()[-1:] in [".", "?", "!"] %]
+    Leave out the "[[[ project_description.rstrip()[-1:] ]]]" at the end: the README and docs add a full stop
+    [% endif %]
+
+python_support:
+  type: str
+  help: Which Python feature releases to support.
+  choices:
+    "SPEC 0: each release for three years after it comes out": spec0
+    "End of life: each release until its upstream end of life": eol
+  default: spec0
+
+docs_enabled:
+  type: bool
+  help: Build a documentation site with Zensical and deploy it to GitHub Pages.
+  default: true
+
+github_owner:
+  type: str
+  default: pdhall99
+  validator: >-
+    [% if not (github_owner | regex_search('^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$')) %]
+    Use a GitHub user or organisation name: letters, digits and "-"
+    [% endif %]
+
+author_name:
+  type: str
+  default: PD Hall
+  validator: >-
+    [% if not author_name.strip() %]
+    Give a name
+    [% elif author_name | regex_search('[\x00-\x1f\x7f]') %]
+    Keep the name to one line, without tabs or other control characters
+    [% endif %]
+
+author_email:
+  type: str
+  default: 20580126+pdhall99@users.noreply.github.com
+  validator: >-
+    [% if not (author_email | regex_search('^[^@\\s]+@[^@\\s]+$')) %]
+    Use an email address, such as name@example.com
+    [% elif author_email | regex_search('[\x00-\x1f\x7f]') %]
+    Leave out control characters
+    [% endif %]
+
+copyright_year:
+  type: int
+  default: 2026
+
+keywords:
+  type: yaml
+  multiline: true
+  help: YAML list of PyPI keywords.
+  default: []
+  validator: >-
+    [% if keywords is string or keywords is mapping or keywords is not sequence
+    or (keywords | reject("string") | list) %]
+    Use a YAML list of strings, for example ["astronomy", "geometry"]
+    [% elif keywords | map("regex_search", '[\x00-\x1f\x7f]') | select | list %]
+    Leave out tabs, newlines and other control characters
+    [% endif %]
+
+runtime_dependencies:
+  type: yaml
+  multiline: true
+  help: YAML list of runtime dependency specifiers, e.g. ["numpy>=2", "httpx"].
+  default: []
+  validator: >-
+    [% if runtime_dependencies is string or runtime_dependencies is mapping
+    or runtime_dependencies is not sequence
+    or (runtime_dependencies | reject("string") | list) %]
+    Use a YAML list of strings, for example ["numpy>=2", "httpx"]
+    [% elif runtime_dependencies | map("regex_search", '[\x00-\x1f\x7f]') | select | list %]
+    Leave out tabs, newlines and other control characters
+    [% endif %]
+
+# --------------------------------------------------------------------------------------
+# Computed values: never asked and not stored in the answers file, so every
+# `copier update` recomputes them from the template version it updates to.
+
+# The supported Python feature releases under each policy.
+# Update both lists each October, when a new Python release comes out and older
+# ones reach their SPEC 0 drop date or end of life:
+# - SPEC 0: releases from the last three years (https://scientific-python.org/specs/spec-0000/)
+# - End of life: releases not yet at end of life (https://devguide.python.org/versions/)
+supported_python_versions:
+  type: yaml
+  when: false
+  default: >-
+    [% if python_support == "spec0" %]["3.13", "3.14", "3.15"]
+    [% else %]["3.11", "3.12", "3.13", "3.14", "3.15"][% endif %]
+
+minimum_python:
+  type: str
+  when: false
+  default: "[[[ supported_python_versions | first ]]]"
+
+newest_python:
+  type: str
+  when: false
+  default: "[[[ supported_python_versions | last ]]]"

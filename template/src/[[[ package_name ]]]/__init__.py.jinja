@@ -1,0 +1,12 @@
+"""[[[ project_description | replace('\\', '\\\\') | replace('"', '\\"') ]]]."""
+
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("[[[ project_name ]]]")
+except PackageNotFoundError:
+    __version__ = "unknown"
+finally:
+    del PackageNotFoundError, version
+
+__all__ = ["__version__"]

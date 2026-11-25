@@ -1,0 +1,88 @@
+[% set repo_url = "https://github.com/" ~ github_owner ~ "/" ~ project_name -%]
+# [[[ project_name ]]]
+
+[![CI](https://img.shields.io/github/actions/workflow/status/[[[ github_owner ]]]/[[[ project_name ]]]/ci.yml?branch=main)]([[[ repo_url ]]]/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/[[[ project_name ]]])](https://pypi.org/project/[[[ project_name ]]]/)
+[![Python](https://img.shields.io/pypi/pyversions/[[[ project_name ]]])](https://pypi.org/project/[[[ project_name ]]]/)
+[![License](https://img.shields.io/github/license/[[[ github_owner ]]]/[[[ project_name ]]])]([[[ repo_url ]]]/blob/main/LICENSE)
+
+[[[ project_description ]]].
+
+## Table of contents
+
+- [Installation](#installation)
+- [Usage](#usage)
+[%- if docs_enabled %]
+- [Documentation](#documentation)
+[%- endif %]
+- [Compatibility and versioning](#compatibility-and-versioning)
+- [Acknowledgements](#acknowledgements)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Installation
+
+`[[[ project_name ]]]` requires Python [[[ minimum_python ]]] or later (see [Compatibility and versioning](#compatibility-and-versioning)).
+
+`[[[ project_name ]]]` is available from [PyPI](https://pypi.org/project/[[[ project_name ]]]/).
+Install it with your preferred Python package manager.
+For example, using `pip`:
+
+```shell
+python -m pip install [[[ project_name ]]]
+```
+
+## Usage
+
+```python
+import [[[ package_name ]]]
+```
+[% if docs_enabled %]
+## Documentation
+
+See [the documentation](https://[[[ github_owner ]]].github.io/[[[ project_name ]]]/).
+[% endif %]
+## Compatibility and versioning
+
+### Package versioning
+
+This project follows [Semantic Versioning](https://semver.org/).
+Releases have version numbers of the form `MAJOR.MINOR.PATCH`:
+
+- **MAJOR** releases may contain backwards-incompatible changes to the public API
+- **MINOR** releases may add functionality and deprecate public APIs while remaining backwards compatible
+- **PATCH** releases contain backwards-compatible fixes
+
+APIs explicitly documented as experimental are not covered by the same backwards-compatibility guarantees.
+
+For releases before `1.0.0`, the public API should be considered under development and may change between minor releases, as permitted by Semantic Versioning.
+
+### Python-version compatibility
+[% if python_support == "spec0" %]
+This project follows [Scientific Python SPEC 0](https://scientific-python.org/specs/spec-0000/).
+Python feature releases may be dropped three years after their initial release as the SPEC 0 support window advances.
+The currently supported Python versions are declared in the package metadata.
+
+Dropping a Python version in accordance with SPEC 0 is considered a change to the supported runtime environment rather than a backwards-incompatible change to this project's public API, and therefore does not by itself require a new major release.
+[%- else %]
+This project supports Python feature releases from their official final release until their [official end-of-life](https://devguide.python.org/versions/).
+
+Support for a new Python feature release is generally introduced in the first minor release of this project following the upstream Python release.
+Python feature releases may be dropped once they reach the end of their upstream support cycle.
+The currently supported Python versions are declared in the package metadata.
+
+Dropping an end-of-life Python version is considered a change to the supported runtime environment rather than a backwards-incompatible change to this project's public API, and therefore does not by itself require a new major release.
+[%- endif %]
+
+## Acknowledgements
+
+This project is developed with assistance from AI coding tools.
+All code included in the project is reviewed and tested by [@[[[ github_owner ]]]](https://github.com/[[[ github_owner ]]]), who takes responsibility for its quality and maintenance.
+
+## Contributing
+
+See the [contributor guide]([[[ repo_url ]]]/blob/main/docs/CONTRIBUTING.md).
+
+## License
+
+[MIT © [[[ author_name ]]]]([[[ repo_url ]]]/blob/main/LICENSE)

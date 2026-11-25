@@ -1,0 +1,48 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-shebang-scripts-are-executable
+      - id: debug-statements
+      - id: check-ast
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+
+  - repo: https://github.com/tox-dev/pyproject-fmt
+    rev: 02ef6d1c28994054a843e58604e1a343faa42987  # frozen: v2.31.2
+    hooks:
+      - id: pyproject-fmt
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 9026c9127e153371d7a78dfcb0c45ae2046a3d10  # frozen: v0.17.6
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca  # frozen: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: c7d31dc612dffdd4d3b2f2b88b9660d3ab057ee8  # frozen: v1.33.1
+    hooks:
+      - id: zizmor
+
+  - repo: local
+    hooks:
+      - id: check-types
+        name: check types
+        entry: hatch check types
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true

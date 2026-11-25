@@ -1,0 +1,430 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUNNER: &runner "ubuntu-24.04"
+  JOB_TIMEOUT: &job_timeout 30
+  # The oldest supported Python: runs the tools, type checks and release checks.
+  TOOL_PYTHON_VERSION: "[[[ minimum_python ]]]"
+  HATCH_VERSION: "1.18.2"
+  UV_VERSION: "0.13.9"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  precommit:
+    name: Pre-commit
+    runs-on: *runner
+    timeout-minutes: *job_timeout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }} # zizmor: ignore[cache-poisoning] disabled for release tags
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.TOOL_PYTHON_VERSION }}
+
+      - name: Install hatch
+        run: uv tool install "hatch==$HATCH_VERSION"
+
+      - name: Run pre-commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hatch run pre-commit:ci
+
+  discover-tests:
+    name: Discover test matrix
+    runs-on: *runner
+    timeout-minutes: *job_timeout
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      coverage_python: ${{ steps.matrix.outputs.coverage_python }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }} # zizmor: ignore[cache-poisoning] disabled for release tags
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.TOOL_PYTHON_VERSION }}
+
+      - name: Install hatch
+        run: uv tool install "hatch==$HATCH_VERSION"
+
+      - name: Read Hatch test matrix
+        id: matrix
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          environments = json.loads(
+              subprocess.check_output(["hatch", "env", "show", "--json"], text=True)
+          )
+
+          rows = []
+          seen = set()
+          for name, config in environments.items():
+              if name != "hatch-test" and not name.startswith("hatch-test."):
+                  continue
+              python_version = config.get("python")
+              if python_version and python_version not in seen:
+                  rows.append({"python": python_version, "environment": name})
+                  seen.add(python_version)
+
+          if not rows:
+              raise SystemExit("No Python versions found in the Hatch test matrix")
+
+          # Coverage is measured on one Python only, the newest: its tracer
+          # (sys.monitoring with branches, 3.14+) has the lowest overhead.
+          coverage = max(rows, key=lambda row: tuple(map(int, row["python"].split("."))))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              matrix = json.dumps({"include": rows}, separators=(",", ":"))
+              print(f"matrix={matrix}", file=output)
+              print(f"coverage_python={coverage['python']}", file=output)
+          PY
+
+  test:
+    name: "Test / Python ${{ matrix.python }}"
+    runs-on: *runner
+    timeout-minutes: *job_timeout
+    needs: discover-tests
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover-tests.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Required for hatch-vcs to resolve the version from tags
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }} # zizmor: ignore[cache-poisoning] disabled for release tags
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+          allow-prereleases: true
+
+      - name: Install hatch
+        run: uv tool install "hatch==$HATCH_VERSION"
+
+      - name: Run tests with coverage
+        if: matrix.python == needs.discover-tests.outputs.coverage_python
+        env:
+          TEST_ENVIRONMENT: ${{ matrix.environment }}
+          TEST_PYTHON: ${{ matrix.python }}
+        run: |
+          hatch test --python "$TEST_PYTHON" --cover
+          hatch run "$TEST_ENVIRONMENT:cov-report-markdown" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run tests
+        if: matrix.python != needs.discover-tests.outputs.coverage_python
+        env:
+          TEST_PYTHON: ${{ matrix.python }}
+        run: hatch test --python "$TEST_PYTHON"
+
+      - name: Upload HTML coverage report
+        if: matrix.python == needs.discover-tests.outputs.coverage_python
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-report
+          path: htmlcov/
+[% if docs_enabled %]
+  docs:
+    name: Build docs
+    if: github.ref_type != 'tag'
+    runs-on: *runner
+    timeout-minutes: *job_timeout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }} # zizmor: ignore[cache-poisoning] disabled for release tags
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.TOOL_PYTHON_VERSION }}
+
+      - name: Install hatch
+        run: uv tool install "hatch==$HATCH_VERSION"
+
+      - name: Build docs
+        run: hatch run docs:build
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  pages:
+    name: Deploy docs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: docs
+    runs-on: *runner
+    timeout-minutes: *job_timeout
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+[% endif %]
+  build:
+    name: Build package
+    runs-on: *runner
+    timeout-minutes: *job_timeout
+    needs: [precommit, test]
+    outputs:
+      distribution_name: ${{ steps.project.outputs.name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }} # zizmor: ignore[cache-poisoning] disabled for release tags
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.TOOL_PYTHON_VERSION }}
+
+      - name: Install hatch
+        run: uv tool install "hatch==$HATCH_VERSION"
+
+      - name: Read project name
+        id: project
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"name={project['name']}", file=output)
+          PY
+
+      - name: Validate release tag
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use X.Y.Z numeric SemVer form; got '$TAG'" >&2
+            exit 1
+          fi
+
+      - name: Verify tagged commit is on main
+        if: github.ref_type == 'tag'
+        run: |
+          tag_commit=$(git rev-list -n 1 "$GITHUB_REF_NAME")
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "Release tag '$GITHUB_REF_NAME' must point to a commit on main" >&2
+            exit 1
+          fi
+
+      - name: Extract release notes
+        if: github.ref_type == 'tag'
+        env:
+          DISTRIBUTION_NAME: ${{ steps.project.outputs.name }}
+        run: |
+          mkdir -p release-notes
+          awk -v heading="## [$GITHUB_REF_NAME]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && (/^## / || /^\[[^]]+\]: /) { exit }
+            found
+          ' docs/CHANGELOG.md > release-notes/notes.md
+          if ! grep -q '[^[:space:]]' release-notes/notes.md; then
+            echo "docs/CHANGELOG.md has no '## [$GITHUB_REF_NAME]' section" >&2
+            exit 1
+          fi
+          cat >> release-notes/notes.md <<EOF
+
+          ---
+
+          Install from [PyPI](https://pypi.org/project/$DISTRIBUTION_NAME/$GITHUB_REF_NAME/):
+
+          \`\`\`shell
+          python -m pip install $DISTRIBUTION_NAME==$GITHUB_REF_NAME
+          \`\`\`
+
+          See the [full changelog](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/CHANGELOG.md).
+          EOF
+
+      - name: Build
+        run: hatch build
+
+      # Runs on every build, so packaging problems show up before a release.
+      # Only a release tag also checks the version against the tag.
+      - name: Smoke-test wheel
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          uv venv --python "$TOOL_PYTHON_VERSION" /tmp/package-smoke
+          uv pip install --python /tmp/package-smoke/bin/python dist/*.whl
+          /tmp/package-smoke/bin/python - <<'PY'
+          import os
+          from email.parser import HeaderParser
+          from importlib import import_module
+          from importlib.metadata import version
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          # Both names come from the wheel's own metadata (PEP 794 Import-Name).
+          (wheel,) = Path("dist").glob("*.whl")
+          with ZipFile(wheel) as zf:
+              (meta,) = [n for n in zf.namelist() if n.endswith(".dist-info/METADATA")]
+              metadata = HeaderParser().parsestr(zf.read(meta).decode())
+
+          name = metadata["Name"]
+          import_names = [
+              n.split(";")[0].strip() for n in metadata.get_all("Import-Name", [])
+          ]
+          assert import_names, f"{wheel.name} has no Import-Name: set import-names"
+          if os.environ["TAG"]:
+              assert version(name) == os.environ["TAG"], (version(name), os.environ["TAG"])
+          for import_name in import_names:
+              import_module(import_name)
+          PY
+
+      - name: Upload release distributions
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - name: Upload release notes
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes/
+
+  ci-gate:
+    name: CI gate
+    if: ${{ always() && (github.event_name != 'push' || github.ref_type != 'tag') }}
+    runs-on: *runner
+    timeout-minutes: *job_timeout
+    needs:
+      - precommit
+      - test
+      - build
+[%- if docs_enabled %]
+      - docs
+[%- endif %]
+    steps:
+      - name: Require every check
+        env:
+          PRECOMMIT: ${{ needs.precommit.result }}
+          TEST: ${{ needs.test.result }}
+          BUILD: ${{ needs.build.result }}
+[%- if docs_enabled %]
+          DOCS: ${{ needs.docs.result }}
+[%- endif %]
+        run: |
+          test "$PRECOMMIT" = success
+          test "$TEST" = success
+          test "$BUILD" = success
+[%- if docs_enabled %]
+          test "$DOCS" = success
+[%- endif %]
+
+  pypi:
+    name: Publish to PyPI
+    if: github.ref_type == 'tag'
+    runs-on: *runner
+    environment:
+      name: pypi
+      url: ${{ format('https://pypi.org/project/{0}/', needs.build.outputs.distribution_name) }}
+    timeout-minutes: *job_timeout
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  github-release:
+    name: GitHub Release
+    if: github.ref_type == 'tag'
+    runs-on: *runner
+    timeout-minutes: *job_timeout
+    needs: [build, pypi]
+    permissions:
+      contents: write
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - name: Download release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: release-notes/
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DISTRIBUTION_NAME: ${{ needs.build.outputs.distribution_name }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$DISTRIBUTION_NAME $GITHUB_REF_NAME" \
+            --notes-file release-notes/notes.md \
+            --verify-tag

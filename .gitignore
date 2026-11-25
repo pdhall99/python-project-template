@@ -1,0 +1,5 @@
+# Caches from checking this repository's scripts. The ignore rules for generated
+# projects are in template/.gitignore.jinja.
+__pycache__/
+.pytest_cache/
+.ruff_cache/
